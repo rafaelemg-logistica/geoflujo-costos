@@ -16,5 +16,5 @@ test("distingue nodos, peajes y vias en GeoJSON", () => {
   ] }));
   assert.equal(parsed.nodes.length, 1);
   assert.equal(parsed.tolls[0].rates.II, 22000);
-  assert.equal(parsed.roads[0].roadClass, "principal");
+  assert.equal(parsed.roads[0].roadClass, "primary");
 });

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { DEFAULT_CONFIG, DEFAULT_VEHICLES, type LogisticsNode, type MetricMatrix } from "../lib/domain.ts";
-import { chooseVehicle, clarkeWright, solveCenterAssignments, tripsRequired, validateScenario } from "../lib/logistics.ts";
+import { buildAccumulatedRoadLoads, chooseVehicle, clarkeWright, solveCenterAssignments, tripsRequired, validateScenario } from "../lib/logistics.ts";
 
 const node = (id: string, role: LogisticsNode["role"], quantityKg = 0, capacityKg = 0): LogisticsNode => ({ id, name: id, role, lat: 4.6, lng: -74.1, quantityKg, capacityKg, fixedCost: role === "center" ? 100 : 0, serviceMin: 20, forcedOpen: false });
 
@@ -12,7 +12,7 @@ function matrix(ids: string[]): MetricMatrix {
 test("calcula viajes y selecciona el vehiculo de menor costo", () => {
   assert.equal(tripsRequired(6001, 6000), 2);
   const choice = chooseVehicle(1200, 20, 30, DEFAULT_VEHICLES, false);
-  assert.equal(choice.vehicle.id, "van");
+  assert.equal(choice.vehicle.id, "luv");
   assert.equal(choice.trips, 1);
 });
 
@@ -34,4 +34,17 @@ test("Clarke-Wright nunca excede la capacidad", () => {
 
 test("valida la topologia minima del escenario", () => {
   assert.ok(validateScenario([node("P", "producer", 100)], DEFAULT_VEHICLES).length >= 3);
+});
+
+test("acumula carga por segmento compartido", () => {
+  const base = {
+    stage: "quick" as const, nodeIds: ["A", "B"], vehicleId: "c2", loadKg: 1000, trips: 2,
+    distanceKm: 1, durationMin: 2, coordinates: [[4, -74], [4.01, -74.01]] as [number, number][], source: "osrm" as const,
+    roadDataSource: "overpass" as const, tollNames: [], roadClassKm: { primary: 1, secondary: 0, tertiary: 0, local: 0, rural: 0, unclassified: 0 }, segmentRoadClasses: ["primary" as const],
+    cost: { distance: 1, time: 0, fixed: 0, tolls: 0, node: 0, overhead: 0, total: 1 },
+  };
+  const loads = buildAccumulatedRoadLoads([{ ...base, id: "R1" }, { ...base, id: "R2", loadKg: 500, trips: 1 }]);
+  assert.equal(loads.length, 1);
+  assert.equal(loads[0].loadKg, 2500);
+  assert.equal(loads[0].vehiclePasses, 3);
 });

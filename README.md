@@ -1,40 +1,35 @@
-# GeoFlujo Costos
+# GeoFlujo Región Central
 
-Aplicación web abierta para dibujar rutas, modelar flujos logísticos y estimar costos de transporte sin ArcGIS, cuentas de usuario ni licencias propietarias.
+Herramienta web abierta para analizar rutas, flujos, peajes, categorías viales, carga acumulada y costos logísticos en el ámbito de la **RAP-E Región Central**.
 
-## Funcionalidad
+Desarrollada por **Rafael Montenegro** y publicada con licencia MIT.
 
-### Ruta rápida
+## Qué permite hacer
 
-- Selección, ordenamiento y arrastre de puntos sobre OpenStreetMap.
-- Rutas viales mediante OSRM con contingencia geodésica identificada.
-- Vehículo, carga, peajes y viaje de regreso configurables.
-- Distancia, duración, viajes y costos desagregados.
+- Dibujar, ordenar y arrastrar puntos sobre un mapa de OpenStreetMap.
+- Calcular rutas viales con OSRM y usar una contingencia geodésica identificada si el servicio no responde.
+- Detectar automáticamente los peajes que atraviesa cada ruta y aplicar la tarifa de la categoría vehicular.
+- Clasificar kilómetros en vías primarias, secundarias, terciarias, locales y rurales a partir de etiquetas OSM.
+- Aplicar matrices de costo por kilómetro y tipo de vehículo provenientes del análisis técnico inicial.
+- Modelar productores → centros de consolidación → nodos de distribución → última milla.
+- Visualizar la carga logística acumulada sobre cada tramo recorrido.
+- Importar CSV, GeoJSON o escenarios JSON y exportar resultados en CSV y GeoJSON.
 
-### Escenario logístico
+La aplicación no requiere cuenta, clave API ni componentes propietarios. El cálculo y el almacenamiento temporal ocurren en el navegador.
 
-- Flujo `productores → centros → nodos de distribución → última milla`.
-- Apertura y capacidad de centros mediante búsqueda branch-and-bound.
-- Selección vehicular por capacidad y menor costo.
-- Planeación Clarke–Wright con restricción de capacidad.
-- Costos de transporte, nodos, peajes y overhead por etapa.
-- Importación CSV, GeoJSON y escenarios JSON reutilizables.
-- Exportación CSV, GeoJSON y JSON.
+## Fuentes y metodología
 
-## Arquitectura abierta
+- **Peajes:** subconjunto regional preparado a partir de datos públicos de INVÍAS, con nombre, ubicación y tarifas por categoría.
+- **Rutas:** servidor público de demostración de OSRM.
+- **Categoría vial:** consulta puntual a Overpass de las vías OSM efectivamente utilizadas por la ruta.
+- **Carga vial:** suma de `carga × viajes` de todas las rutas que comparten un segmento.
+- **Costos viales:** tarifas integrales COP/km diferenciadas por categoría vial y vehículo. No se agrega combustible por separado para evitar doble conteo.
 
-- React, TypeScript y Vinext.
-- Leaflet empaquetado con la aplicación.
-- Teselas de OpenStreetMap con atribución visible.
-- API pública OSRM para matrices, tiempos y geometrías.
-- Cálculo local en el navegador; el proyecto no guarda escenarios ni datos personales.
-- Cloudflare Workers/Sites como destino de despliegue.
+La explicación completa y las reglas de homologación están en [docs/fuentes-y-metodologia.md](docs/fuentes-y-metodologia.md).
 
-OSRM y los servidores comunitarios de OpenStreetMap son apropiados para demostraciones y tráfico moderado, pero no ofrecen un SLA. El modo público limita cada escenario a 30 nodos, reutiliza matrices durante la sesión y muestra cuándo utiliza una estimación de contingencia.
+## Desarrollo local
 
-## Desarrollo
-
-Requiere Node.js 22.13 o posterior y pnpm 11.
+Requiere Node.js 22.13 o posterior y pnpm 11.19.
 
 ```bash
 pnpm install
@@ -47,25 +42,16 @@ Validación completa:
 pnpm check
 ```
 
-## Datos de entrada
+## Publicación
 
-La plantilla mínima está en [`examples/nodos.csv`](examples/nodos.csv). Los contratos completos de CSV, GeoJSON y JSON están documentados en [`docs/contratos-de-datos.md`](docs/contratos-de-datos.md).
+Cada cambio en `main` ejecuta lint, comprobación de tipos, pruebas y compilación. Si todo finaliza correctamente, GitHub Actions publica el contenido estático en GitHub Pages.
 
-Los valores colombianos y COP incluidos son demostrativos y editables. No están asociados a un producto agrícola ni sustituyen una calibración con fuentes vigentes.
+Repositorio: <https://github.com/rafaelemg-logistica/geoflujo-costos>
 
-## Uso de vías y peajes propios
+## Límites responsables
 
-Un GeoJSON opcional puede incluir:
-
-- Líneas con `road_class` y `cost_per_km`.
-- Puntos de peaje con `rate`, `rate_I`, `rate_II`, etc.
-
-Los tramos sin coincidencia espacial usan el costo base del vehículo. Si no se carga una capa de peajes, puede definirse un valor manual por trayecto.
-
-## Alcance
-
-Esta versión prioriza trazabilidad y reproducibilidad. No ofrece optimización exacta para escenarios grandes, almacenamiento en la nube, geocodificación ni garantías operativas sobre servicios comunitarios. Para producción de alto tráfico se recomienda operar una instancia propia de OSRM/Valhalla y un proveedor de mapas con SLA.
+El modo público admite hasta 30 nodos y reutiliza matrices durante la sesión. OSRM, Overpass y las teselas comunitarias de OpenStreetMap no ofrecen SLA; para uso operativo de alto tráfico deben desplegarse servicios propios o contratarse proveedores con garantía.
 
 ## Licencia
 
-Código bajo [licencia MIT](LICENSE). Los datos de OpenStreetMap conservan sus condiciones de atribución y los servicios externos sus propias políticas de uso.
+Código bajo [licencia MIT](LICENSE). Las fuentes externas conservan sus licencias y condiciones de atribución.
