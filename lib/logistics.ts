@@ -5,13 +5,16 @@ import type {
   MetricMatrix,
   OptimizationResult,
   PlannedRoute,
+  RoadCategory,
   RoadFeature,
+  RoadLoadSegment,
   ScenarioConfig,
   StageSummary,
   TollFeature,
   Vehicle,
 } from "./domain";
 import { getMetricMatrix, getRoute, haversineKm } from "./routing";
+import { getRoadFeaturesForRoute } from "./road-analysis";
 
 type VehicleChoice = { vehicle: Vehicle; trips: number; cost: number };
 
@@ -144,9 +147,11 @@ function pointLineDistanceM(point: [number, number], line: [number, number][]) {
   return minimum;
 }
 
-function spatialCosts(coordinates: [number, number][], vehicle: Vehicle, roads: RoadFeature[], tolls: TollFeature[], config: ScenarioConfig) {
-  const roadClassKm: Record<string, number> = {};
-  let distanceCost = 0;
+const EMPTY_ROAD_KM: Record<RoadCategory, number> = { primary: 0, secondary: 0, tertiary: 0, local: 0, rural: 0, unclassified: 0 };
+
+function spatialProfile(coordinates: [number, number][], roads: RoadFeature[], tolls: TollFeature[], config: ScenarioConfig) {
+  const roadClassKm: Record<RoadCategory, number> = { ...EMPTY_ROAD_KM };
+  const segmentRoadClasses: RoadCategory[] = [];
   for (let index = 1; index < coordinates.length; index += 1) {
     const start = coordinates[index - 1];
     const end = coordinates[index];
@@ -158,33 +163,80 @@ function spatialCosts(coordinates: [number, number][], vehicle: Vehicle, roads: 
       const candidateDistance = pointLineDistanceM(midpoint, road.coordinates);
       if (candidateDistance < distance) { distance = candidateDistance; match = road; }
     }
-    const roadClass = match && distance <= config.roadMatchToleranceM ? match.roadClass : "sin_clasificar";
-    const rate = match && distance <= config.roadMatchToleranceM && match.costPerKm != null ? match.costPerKm : vehicle.costPerKm;
-    roadClassKm[roadClass] = (roadClassKm[roadClass] ?? 0) + segmentKm;
-    distanceCost += segmentKm * rate;
+    const roadClass: RoadCategory = match && distance <= config.roadMatchToleranceM ? match.roadClass : "unclassified";
+    roadClassKm[roadClass] += segmentKm;
+    segmentRoadClasses.push(roadClass);
   }
   const matchedTolls = tolls.filter((toll) => pointLineDistanceM([toll.lat, toll.lng], coordinates) <= config.tollMatchToleranceM);
-  const tollCost = matchedTolls.reduce((sum, toll) => sum + (toll.rates[vehicle.tollCategory] ?? toll.rates.default ?? 0), 0) + config.manualTolls;
-  return { roadClassKm, distanceCost, tollCost, tollNames: matchedTolls.map((toll) => toll.name) };
+  return { roadClassKm, segmentRoadClasses, matchedTolls };
+}
+
+function vehicleSpatialCost(vehicle: Vehicle, profile: ReturnType<typeof spatialProfile>, durationMin: number, loadKg: number, config: ScenarioConfig) {
+  const trips = tripsRequired(loadKg, vehicle.capacityKg);
+  const returnMultiplier = config.roundTrip ? 2 : 1;
+  const distanceCost = (Object.entries(profile.roadClassKm) as [RoadCategory, number][])
+    .reduce((sum, [roadClass, km]) => sum + km * (vehicle.roadCostPerKm?.[roadClass] ?? vehicle.costPerKm), 0);
+  const tollCost = profile.matchedTolls.reduce((sum, toll) => sum + (toll.rates[vehicle.tollCategory] ?? toll.rates.default ?? 0), 0);
+  const total = trips * (returnMultiplier * (distanceCost + tollCost + durationMin / 60 * vehicle.costPerHour) + vehicle.fixedCost);
+  return { vehicle, trips, distanceCost, tollCost, total };
 }
 
 async function materializeRoute(id: string, stage: PlannedRoute["stage"], routeNodes: LogisticsNode[], loadKg: number, vehicles: Vehicle[], config: ScenarioConfig, roads: RoadFeature[], tolls: TollFeature[], nodeCostPerKg: number) {
   const metric = await getRoute(routeNodes, config);
-  const choice = chooseVehicle(loadKg, metric.distanceKm, metric.durationMin, vehicles, config.roundTrip);
+  const routeRoads = roads.length ? roads : await getRoadFeaturesForRoute(metric.osmNodeIds);
+  const roadDataSource: PlannedRoute["roadDataSource"] = roads.length ? "uploaded" : routeRoads.length ? "overpass" : "fallback";
+  const spatial = spatialProfile(metric.coordinates, routeRoads, tolls, config);
+  const choices = vehicles.filter((vehicle) => vehicle.capacityKg > 0)
+    .map((vehicle) => vehicleSpatialCost(vehicle, spatial, metric.durationMin, loadKg, config))
+    .sort((a, b) => a.total - b.total);
+  if (!choices.length) throw new Error("Ningún vehículo tiene capacidad válida");
+  const choice = choices[0];
   const passMultiplier = choice.trips * (config.roundTrip && routeNodes[0].id !== routeNodes.at(-1)?.id ? 2 : 1);
-  const spatial = spatialCosts(metric.coordinates, choice.vehicle, roads, tolls, config);
-  const distance = spatial.distanceCost * passMultiplier;
+  const distance = choice.distanceCost * passMultiplier;
   const time = metric.durationMin / 60 * choice.vehicle.costPerHour * passMultiplier;
   const fixed = choice.vehicle.fixedCost * choice.trips;
-  const tollCost = spatial.tollCost * passMultiplier;
+  const tollCost = choice.tollCost * passMultiplier;
   const node = loadKg * nodeCostPerKg;
   const overhead = (distance + time + fixed + tollCost + node) * config.nodeCosts.overheadPercent / 100;
   const cost: CostBreakdown = { distance: money(distance), time: money(time), fixed: money(fixed), tolls: money(tollCost), node: money(node), overhead: money(overhead), total: money(distance + time + fixed + tollCost + node + overhead) };
   return {
     id, stage, nodeIds: routeNodes.map((node) => node.id), vehicleId: choice.vehicle.id, loadKg, trips: choice.trips,
-    distanceKm: metric.distanceKm, durationMin: metric.durationMin, coordinates: metric.coordinates, source: metric.source,
-    tollNames: spatial.tollNames, roadClassKm: Object.fromEntries(Object.entries(spatial.roadClassKm).map(([key, value]) => [key, money(value)])), cost,
+    distanceKm: metric.distanceKm, durationMin: metric.durationMin, coordinates: metric.coordinates, source: metric.source, roadDataSource,
+    tollNames: spatial.matchedTolls.map((toll) => toll.name),
+    roadClassKm: Object.fromEntries(Object.entries(spatial.roadClassKm).map(([key, value]) => [key, money(value)])) as Record<RoadCategory, number>,
+    segmentRoadClasses: spatial.segmentRoadClasses,
+    cost,
   } satisfies PlannedRoute;
+}
+
+export function buildAccumulatedRoadLoads(routes: PlannedRoute[]): RoadLoadSegment[] {
+  const segments = new Map<string, RoadLoadSegment>();
+  routes.forEach((route) => {
+    const passes = route.trips;
+    for (let index = 1; index < route.coordinates.length; index += 1) {
+      const start = route.coordinates[index - 1];
+      const end = route.coordinates[index];
+      const startKey = `${start[0].toFixed(5)},${start[1].toFixed(5)}`;
+      const endKey = `${end[0].toFixed(5)},${end[1].toFixed(5)}`;
+      const key = [startKey, endKey].sort().join("|");
+      const current = segments.get(key);
+      if (current) {
+        current.loadKg += route.loadKg * passes;
+        current.vehiclePasses += passes;
+        if (!current.routeIds.includes(route.id)) current.routeIds.push(route.id);
+      } else {
+        segments.set(key, {
+          id: `CV-${segments.size + 1}`,
+          coordinates: [start, end],
+          roadClass: route.segmentRoadClasses[index - 1] ?? "unclassified",
+          loadKg: route.loadKg * passes,
+          vehiclePasses: passes,
+          routeIds: [route.id],
+        });
+      }
+    }
+  });
+  return [...segments.values()].map((segment) => ({ ...segment, loadKg: money(segment.loadKg) }));
 }
 
 function summarize(routes: PlannedRoute[]): StageSummary[] {
@@ -250,14 +302,14 @@ export async function optimizeScenario(nodes: LogisticsNode[], vehicles: Vehicle
   }
 
   routes.filter((route) => route.source === "estimate").forEach((route) => validations.push(`${route.id}: geometria y costo calculados con estimacion de contingencia.`));
-  if (!roads.length) validations.push("Sin capa vial opcional: se aplico el costo base por kilometro del vehiculo.");
-  if (!tolls.length && config.manualTolls === 0) validations.push("Sin capa ni valor manual de peajes: el componente de peajes es cero.");
+  if (routes.some((route) => route.roadDataSource === "fallback")) validations.push("En algunas rutas no fue posible consultar la categoría vial; se aplicó la tarifa de contingencia del vehículo.");
+  if (!tolls.length) validations.push("No fue posible cargar la capa regional de peajes; el componente de peajes es cero.");
   const producerSupply = nodes.filter((node) => node.role === "producer").reduce((sum, node) => sum + node.quantityKg, 0);
   const customerDemand = customers.reduce((sum, node) => sum + node.quantityKg, 0);
   if (Math.abs(producerSupply - customerDemand) > 0.01) validations.push(`La oferta (${producerSupply} kg) y la demanda (${customerDemand} kg) no coinciden.`);
   const stages = summarize(routes);
   const totalCost = stages.find((stage) => stage.stage === "all")?.cost ?? 0;
-  return { assignments: assignmentSolution.assignments, openCenterIds: assignmentSolution.openCenterIds, routes, stages, totalCost, costPerKg: producerSupply > 0 ? money(totalCost / producerSupply) : 0, validations };
+  return { assignments: assignmentSolution.assignments, openCenterIds: assignmentSolution.openCenterIds, routes, roadLoads: buildAccumulatedRoadLoads(routes), stages, totalCost, costPerKg: producerSupply > 0 ? money(totalCost / producerSupply) : 0, validations };
 }
 
 export async function calculateQuickRoute(nodes: LogisticsNode[], vehicle: Vehicle, config: ScenarioConfig, loadKg: number, roads: RoadFeature[] = [], tolls: TollFeature[] = []) {

@@ -61,17 +61,19 @@ export async function getRoute(nodes: LogisticsNode[], config: ScenarioConfig): 
   if (cached) return cached;
   try {
     const coordinates = nodes.map((node) => `${node.lng},${node.lat}`).join(";");
-    const response = await fetch(`https://router.project-osrm.org/route/v1/driving/${coordinates}?overview=full&geometries=geojson&steps=false`, { signal: AbortSignal.timeout(15000) });
+    const response = await fetch(`https://router.project-osrm.org/route/v1/driving/${coordinates}?overview=full&geometries=geojson&steps=false&annotations=nodes`, { signal: AbortSignal.timeout(15000) });
     if (!response.ok) throw new Error("OSRM route unavailable");
     const payload = await response.json();
     const best = payload.routes?.[0];
     if (!best) throw new Error("No route");
+    const osmNodeIds = [...new Set<number>((best.legs ?? []).flatMap((leg: { annotation?: { nodes?: number[] } }) => leg.annotation?.nodes ?? []))];
     const result: RouteMetric = {
       fromId: nodes[0].id,
       toId: nodes[nodes.length - 1].id,
       distanceKm: best.distance / 1000,
       durationMin: best.duration / 60,
       coordinates: best.geometry.coordinates.map(([lng, lat]: [number, number]) => [lat, lng]),
+      osmNodeIds,
       source: "osrm",
       confidence: "high",
     };

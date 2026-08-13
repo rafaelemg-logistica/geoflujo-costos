@@ -1,4 +1,5 @@
-import type { LogisticsNode, NodeRole, OptimizationResult, RoadFeature, Scenario, TollFeature } from "./domain";
+import { DEFAULT_CONFIG, DEFAULT_VEHICLES, type LogisticsNode, type NodeRole, type OptimizationResult, type RoadCategory, type RoadFeature, type Scenario, type TollFeature } from "./domain";
+import { classifyHighway } from "./road-analysis";
 
 function splitCsvLine(line: string) {
   const values: string[] = [];
@@ -24,6 +25,16 @@ function booleanValue(value: unknown) {
   return ["1", "true", "si", "sí", "yes", "x"].includes(String(value ?? "").trim().toLowerCase());
 }
 
+function roadCategory(value: unknown): RoadCategory {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  if (["primary", "principal", "primaria", "1"].includes(normalized)) return "primary";
+  if (["secondary", "secundaria", "2"].includes(normalized)) return "secondary";
+  if (["tertiary", "terciaria", "3"].includes(normalized)) return "tertiary";
+  if (["local", "4"].includes(normalized)) return "local";
+  if (["rural", "rural_baja", "5"].includes(normalized)) return "rural";
+  return classifyHighway(normalized);
+}
+
 export function parseNodesCsv(text: string): LogisticsNode[] {
   const lines = text.replace(/^\uFEFF/, "").split(/\r?\n/).filter((line) => line.trim());
   if (lines.length < 2) throw new Error("El CSV no contiene filas de datos");
@@ -43,7 +54,7 @@ export function parseNodesCsv(text: string): LogisticsNode[] {
   })) as LogisticsNode[];
   const roles = new Set(["producer", "center", "hub", "customer"]);
   if (nodes.some((node) => !roles.has(node.role))) throw new Error("Cada fila debe usar role: producer, center, hub o customer");
-  if (nodes.some((node) => !Number.isFinite(node.lat) || !Number.isFinite(node.lng))) throw new Error("Cada fila debe incluir lat y lng validos");
+  if (nodes.some((node) => !Number.isFinite(node.lat) || !Number.isFinite(node.lng))) throw new Error("Cada fila debe incluir lat y lng válidos");
   return nodes;
 }
 
@@ -69,14 +80,17 @@ export function parseGeoJson(text: string) {
       } else {
         const rates: Record<string, number> = {};
         Object.entries(properties).forEach(([key, value]) => {
-          if (key.startsWith("rate_") || key.startsWith("tarifa_")) rates[key.split("_").slice(1).join("_").toUpperCase()] = numberValue(value);
+          if (key.startsWith("rate_") || key.startsWith("tarifa_") || key.startsWith("categoria_")) rates[key.split("_").slice(1).join("_").toUpperCase()] = numberValue(value);
         });
         if (properties.rate != null || properties.tarifa != null) rates.default = numberValue(properties.rate ?? properties.tarifa);
-        tolls.push({ id: String(properties.id ?? `P${index + 1}`), name: String(properties.name ?? properties.nombre ?? `Peaje ${index + 1}`), lat, lng, rates });
+        tolls.push({
+          id: String(properties.id ?? `P${index + 1}`), name: String(properties.name ?? properties.nombre ?? properties.nombre_peaje ?? `Peaje ${index + 1}`), lat, lng, rates,
+          sector: String(properties.sector ?? ""), direction: String(properties.direction ?? properties.sentido ?? ""), operator: String(properties.operator ?? properties.responsable ?? ""),
+        });
       }
     }
     if (geometry.type === "LineString" && Array.isArray(geometry.coordinates)) roads.push({
-      id: String(properties.id ?? `V${index + 1}`), roadClass: String(properties.road_class ?? properties.clase_vial ?? "sin_clasificar"),
+      id: String(properties.id ?? `V${index + 1}`), roadClass: roadCategory(properties.road_class ?? properties.clase_vial ?? properties.highway), highway: String(properties.highway ?? "") || undefined,
       costPerKm: properties.cost_per_km == null && properties.costo_km == null ? undefined : numberValue(properties.cost_per_km ?? properties.costo_km),
       coordinates: (geometry.coordinates as [number, number][]).map(([lng, lat]) => [lat, lng]),
     });
@@ -89,7 +103,7 @@ export function scenarioTemplateCsv() {
     "id,name,role,lat,lng,quantity_kg,capacity_kg,fixed_cost,service_min,forced_open",
     "P1,Productor norte,producer,4.90,-74.10,3000,0,0,0,false",
     "C1,Centro regional,center,4.75,-74.05,0,12000,500000,0,true",
-    "H1,Nodo de distribucion,hub,4.66,-74.08,0,0,0,0,false",
+    "H1,Nodo de distribución,hub,4.66,-74.08,0,0,0,0,false",
     "D1,Cliente urbano,customer,4.62,-74.12,3000,0,0,20,false",
   ].join("\n");
 }
@@ -109,8 +123,8 @@ function csvCell(value: unknown) {
 }
 
 export function resultsCsv(result: OptimizationResult) {
-  const headers = ["route_id", "stage", "vehicle_id", "node_ids", "load_kg", "trips", "distance_km", "duration_min", "source", "distance_cost", "time_cost", "fixed_cost", "tolls", "node_cost", "overhead", "total_cost"];
-  const rows = result.routes.map((route) => [route.id, route.stage, route.vehicleId, route.nodeIds.join(" > "), route.loadKg, route.trips, route.distanceKm.toFixed(2), route.durationMin.toFixed(2), route.source, route.cost.distance, route.cost.time, route.cost.fixed, route.cost.tolls, route.cost.node, route.cost.overhead, route.cost.total]);
+  const headers = ["route_id", "stage", "vehicle_id", "node_ids", "load_kg", "trips", "distance_km", "duration_min", "source", "road_source", "tolls_detected", "distance_cost", "time_cost", "fixed_cost", "tolls", "node_cost", "overhead", "total_cost"];
+  const rows = result.routes.map((route) => [route.id, route.stage, route.vehicleId, route.nodeIds.join(" > "), route.loadKg, route.trips, route.distanceKm.toFixed(2), route.durationMin.toFixed(2), route.source, route.roadDataSource, route.tollNames.join(" | "), route.cost.distance, route.cost.time, route.cost.fixed, route.cost.tolls, route.cost.node, route.cost.overhead, route.cost.total]);
   return [headers, ...rows].map((row) => row.map(csvCell).join(",")).join("\n");
 }
 
@@ -119,11 +133,23 @@ export function resultGeoJson(nodes: LogisticsNode[], result: OptimizationResult
     type: "FeatureCollection",
     features: [
       ...nodes.map((node) => ({ type: "Feature", properties: { ...node }, geometry: { type: "Point", coordinates: [node.lng, node.lat] } })),
-      ...result.routes.map((route) => ({ type: "Feature", properties: { id: route.id, stage: route.stage, vehicle_id: route.vehicleId, load_kg: route.loadKg, total_cost: route.cost.total, source: route.source }, geometry: { type: "LineString", coordinates: route.coordinates.map(([lat, lng]) => [lng, lat]) } })),
+      ...result.routes.map((route) => ({ type: "Feature", properties: { id: route.id, stage: route.stage, vehicle_id: route.vehicleId, load_kg: route.loadKg, total_cost: route.cost.total, source: route.source, road_source: route.roadDataSource, tolls: route.tollNames.join(" | ") }, geometry: { type: "LineString", coordinates: route.coordinates.map(([lat, lng]) => [lng, lat]) } })),
+      ...result.roadLoads.map((segment) => ({ type: "Feature", properties: { id: segment.id, feature_type: "road_load", road_class: segment.roadClass, load_kg: segment.loadKg, vehicle_passes: segment.vehiclePasses, route_ids: segment.routeIds.join(",") }, geometry: { type: "LineString", coordinates: segment.coordinates.map(([lat, lng]) => [lng, lat]) } })),
     ],
   }, null, 2);
 }
 
 export function scenarioJson(scenario: Scenario) {
   return JSON.stringify(scenario, null, 2);
+}
+
+export function normalizeScenario(value: Scenario): Scenario {
+  return {
+    ...value,
+    config: { ...DEFAULT_CONFIG, ...value.config, nodeCosts: { ...DEFAULT_CONFIG.nodeCosts, ...value.config?.nodeCosts } },
+    vehicles: (value.vehicles?.length ? value.vehicles : DEFAULT_VEHICLES).map((vehicle) => {
+      const fallback = DEFAULT_VEHICLES.find((item) => item.id === vehicle.id) ?? DEFAULT_VEHICLES[0];
+      return { ...fallback, ...vehicle, roadCostPerKm: { ...fallback.roadCostPerKm, ...vehicle.roadCostPerKm } };
+    }),
+  };
 }
