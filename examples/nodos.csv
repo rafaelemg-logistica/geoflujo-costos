@@ -1,0 +1,5 @@
+id,name,role,lat,lng,quantity_kg,capacity_kg,fixed_cost,service_min,forced_open
+P1,Productor norte,producer,4.90,-74.10,3000,0,0,0,false
+C1,Centro regional,center,4.75,-74.05,0,12000,500000,0,true
+H1,Nodo de distribucion,hub,4.66,-74.08,0,0,0,0,false
+D1,Cliente urbano,customer,4.62,-74.12,3000,0,0,20,false
