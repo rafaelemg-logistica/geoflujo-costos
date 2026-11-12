@@ -21,7 +21,7 @@ function PointFields({point,onUpdate}:{point:GeoPoint;onUpdate:(p:GeoPoint)=>voi
 const numInput=(label:string,value:number,onChange:(v:number)=>void,step=1)=><label>{label}<input type="number" min="0" step={step} value={value} onChange={e=>onChange(number(+e.target.value))}/></label>;
 
 export default function AgroCalculator(){
- const [model,setModel]=useState<AgroModel>(()=>{try{const stored=localStorage.getItem("geoflujo-agro-v1");if(stored){const x:unknown=JSON.parse(stored);if(validateAgroModel(x))return x;}}catch{}return copyStarterModel();});
+ const [model,setModel]=useState<AgroModel>(()=>{try{const stored=localStorage.getItem("geoflujo-agro-v1");if(stored){const x:unknown=JSON.parse(stored);if(validateAgroModel(x))return x;}}catch{ return copyStarterModel(); }return copyStarterModel();});
  const [selectedId,setSelectedId]=useState("E1");
  const [iteration,setIteration]=useState<Iteration>("base");
  const [compare,setCompare]=useState(true);
