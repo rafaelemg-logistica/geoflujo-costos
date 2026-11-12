@@ -214,6 +214,7 @@ export default function Home() {
     <header className="topbar">
       <a className="brand" href="#top" aria-label="GeoFlujo Región Central, inicio"><span className="brand-mark" aria-hidden="true"><i /><i /><i /></span><span><strong>GeoFlujo</strong> Región Central</span></a>
       <nav className="mode-switch" aria-label="Modo de cálculo"><button className={mode === "quick" ? "active" : ""} onClick={() => switchMode("quick")}>Ruta rápida</button><button className={mode === "scenario" ? "active" : ""} onClick={() => switchMode("scenario")}>Escenario logístico</button></nav>
+      <a className="github-link" href="?calculadora=1" style={{marginRight:12}}>Calculadora agropecuaria ↗</a>
       <a className="github-link" href="https://github.com/rafaelemg-logistica/geoflujo-costos" target="_blank" rel="noreferrer">Código abierto ↗</a>
     </header>
 
