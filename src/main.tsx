@@ -3,5 +3,9 @@ import { createRoot } from "react-dom/client";
 import "leaflet/dist/leaflet.css";
 import "../app/globals.css";
 import Home from "../app/page";
+import AgroCalculator from "./AgroCalculator";
 
-createRoot(document.getElementById("root")!).render(<StrictMode><Home /></StrictMode>);
+const isAgroCalculator = new URLSearchParams(window.location.search).has("calculadora");
+createRoot(document.getElementById("root")!).render(
+  <StrictMode>{isAgroCalculator ? <AgroCalculator /> : <Home />}</StrictMode>
+);
